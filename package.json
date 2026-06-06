@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "electron:dev": "npm run build:web && npm run build:electron && electron dist/electron/main.cjs",
     "package:mac": "bash scripts/package-mac.sh",
+    "package:win": "bash scripts/package-win.sh",
     "dist": "npm run build:web && npm run build:electron && electron-builder",
     "dist:mac": "npm run build:web && npm run build:electron && electron-builder --mac",
     "dist:win": "npm run build:web && npm run build:electron && electron-builder --win"
@@ -86,7 +87,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,

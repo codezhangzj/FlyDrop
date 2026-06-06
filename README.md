@@ -83,6 +83,9 @@ npm run dist:mac
 # 一键打包 macOS（自动检查依赖、生成图标、清理旧产物并输出 release/*.dmg）
 npm run package:mac
 
+# 一键打包 Windows（默认同时产出 x64 + ia32 安装包，兼容 Win7 / Win10 / Win11）
+npm run package:win
+
 # 仅打包 Windows（产出 release/*.exe，需在 Windows 或 CI 上构建）
 npm run dist:win
 ```
@@ -91,6 +94,7 @@ npm run dist:win
 
 说明：
 - macOS 上可直接构建 Mac 包；Windows 包通常需在 Windows 机器或 CI（如 GitHub Actions）上构建。
+- Win7 兼容需要使用 Electron 22；`npm run package:win` 会自动用 Electron 22.3.27 打包 Windows 版。Electron 23+ 已不支持 Windows 7/8/8.1。
 - 未配置代码签名时，首次打开会被 Gatekeeper / SmartScreen 拦截，需手动允许（自用无妨）。
 - 国内网络下载 Electron 二进制较慢，项目已在 `.npmrc` 配置淘宝镜像加速。
 - 主进程通过 esbuild 打包为单个 CommonJS 文件（`dist/electron/main.cjs`），原生模块 `sharp` 保持外置。
