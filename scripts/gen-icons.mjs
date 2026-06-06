@@ -38,14 +38,27 @@ function logoSvg(size, withBg = true) {
   </svg>`
 }
 
+function trayTemplateSvg(size) {
+  const s = size / 64
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <g transform="translate(${size * 0.5}, ${size * 0.5}) scale(${s})" fill="#000000">
+      <path transform="translate(-30,-30)"
+        d="M58 4 L4 28 L24 36 L26 56 L36 42 L50 52 L58 4 Z M58 4 L24 36 L26 56 L34 40 Z"
+        fill="#000000"/>
+    </g>
+  </svg>`
+}
+
 async function gen() {
   // 应用图标（electron-builder 用，>=512）
   await sharp(Buffer.from(logoSvg(1024))).png().toFile(path.join(buildDir, 'icon.png'))
   console.log('✓ build/icon.png (1024)')
 
-  // 托盘图标
+  // 托盘图标：Windows/Linux 使用彩色图标；macOS 使用透明背景 template 图标。
   await sharp(Buffer.from(logoSvg(32))).png().toFile(path.join(buildDir, 'tray-icon.png'))
-  console.log('✓ build/tray-icon.png (32)')
+  await sharp(Buffer.from(trayTemplateSvg(16))).png().toFile(path.join(buildDir, 'tray-iconTemplate.png'))
+  await sharp(Buffer.from(trayTemplateSvg(32))).png().toFile(path.join(buildDir, 'tray-iconTemplate@2x.png'))
+  console.log('✓ build/tray-icon.png (32), tray-iconTemplate.png, tray-iconTemplate@2x.png')
 
   // PWA 图标
   await sharp(Buffer.from(logoSvg(192))).png().toFile(path.join(publicDir, 'icon-192.png'))

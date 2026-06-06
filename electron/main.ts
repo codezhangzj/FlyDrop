@@ -159,10 +159,12 @@ async function createWindow() {
  * 创建托盘图标与菜单。
  */
 function createTray() {
-  // 用一个简单的内置图标（16x16 透明占位，实际打包会用 build/icon）
+  const trayIconName = process.platform === 'darwin'
+    ? 'tray-iconTemplate.png'
+    : 'tray-icon.png'
   const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'tray-icon.png')
-    : path.join(__dirname, '../build/tray-icon.png')
+    ? path.join(process.resourcesPath, trayIconName)
+    : path.join(__dirname, '../../build', trayIconName)
 
   let image = nativeImage.createFromPath(iconPath)
   if (image.isEmpty()) {
