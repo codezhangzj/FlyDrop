@@ -99,6 +99,18 @@ npm run dist:win
 - 国内网络下载 Electron 二进制较慢，项目已在 `.npmrc` 配置淘宝镜像加速。
 - 主进程通过 esbuild 打包为单个 CommonJS 文件（`dist/electron/main.cjs`），原生模块 `sharp` 保持外置。
 
+## GitHub Actions 自动打包
+
+项目已配置 `.github/workflows/package.yml`：
+
+- 在 GitHub 的 Actions 页面可手动运行 `Package Desktop Apps`
+- 推送 `v*` tag（如 `v0.1.0`）会自动打包 macOS / Windows，并创建 GitHub Release 上传安装包
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## 使用方法
 
 1. 在电脑上运行桌面应用，或 `npm run preview` / `npm start`
