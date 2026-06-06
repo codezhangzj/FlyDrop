@@ -1,0 +1,96 @@
+{
+  "name": "flydrop",
+  "version": "0.1.0",
+  "description": "局域网文件传输工具",
+  "type": "module",
+  "main": "dist/electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:electron": "node scripts/build-electron.mjs",
+    "start": "node dist/server/index.js",
+    "preview": "npm run build:web && tsx server/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "electron:dev": "npm run build:web && npm run build:electron && electron dist/electron/main.cjs",
+    "package:mac": "bash scripts/package-mac.sh",
+    "dist": "npm run build:web && npm run build:electron && electron-builder",
+    "dist:mac": "npm run build:web && npm run build:electron && electron-builder --mac",
+    "dist:win": "npm run build:web && npm run build:electron && electron-builder --win"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/multipart": "^9.0.1",
+    "@fastify/static": "^8.0.3",
+    "@fastify/websocket": "^11.0.1",
+    "archiver": "^7.0.1",
+    "fastify": "^5.1.0",
+    "lucide-vue-next": "^0.577.0",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.33.5",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.3",
+    "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "fast-check": "^4.8.0",
+    "pinia": "^2.3.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^3.2.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "build": {
+    "appId": "com.flydrop.app",
+    "productName": "FlyDrop",
+    "executableName": "FlyDrop",
+    "asar": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/web",
+        "to": "web"
+      },
+      {
+        "from": "build/tray-icon.png",
+        "to": "tray-icon.png"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities",
+      "icon": "build/icon.png"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
