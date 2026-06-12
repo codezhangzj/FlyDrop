@@ -14,6 +14,9 @@ const settings = useSettingsStore()
 const toast = useToast()
 const desktop = isDesktop()
 
+// 构建时由 vite 从 package.json 注入，避免硬编码版本滞后
+const appVersion = __APP_VERSION__
+
 const downloadDir = ref('')
 const autoLaunch = ref(false)
 
@@ -136,7 +139,7 @@ async function toggleAutoLaunch() {
         <Info :size="16" />
         <div>
           <div class="about-name">FlyDrop</div>
-          <div class="about-ver">版本 0.1.2 · 局域网文件传输</div>
+          <div class="about-ver">版本 {{ appVersion }} · 局域网文件传输</div>
         </div>
       </div>
     </section>

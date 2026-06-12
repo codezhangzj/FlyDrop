@@ -29,7 +29,7 @@ git push origin v0.1.6
 
 - **版本号会在打包时从 tag 自动注入**到 `package.json`（tag `v0.1.6` → 版本 `0.1.6`），所以产物文件名永远和 tag 一致，**无需手动改 `package.json` 再提交**。
 - 仍建议发版前把 `package.json` 的 `version` 同步改成目标版本并提交，让仓库里的版本号保持诚实。`test` job 会在版本不一致时给出 warning 提醒（不会阻断打包）。
-- `web/src/views/SettingsView.vue` 的「关于」里目前是**硬编码版本号**，CI 不会自动改它。发新版时记得手动同步，否则设置页显示的版本会滞后。
+- 设置页「关于」显示的版本号会在前端构建时从 `package.json` 自动注入（vite `define` → `__APP_VERSION__`），无需手动维护。
 
 ## 重要约定（不知道就会踩）
 
