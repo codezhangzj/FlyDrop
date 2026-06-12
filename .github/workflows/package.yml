@@ -117,9 +117,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          shopt -s globstar
+          # 只收集文件（download-artifact 会建子目录，通配符会误匹配目录导致上传失败）
+          mapfile -t assets < <(find artifacts -type f)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "No artifact files found under artifacts/" >&2
+            exit 1
+          fi
+          printf 'Uploading: %s\n' "${assets[@]}"
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" artifacts/**/* --clobber
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
           else
-            gh release create "$TAG_NAME" artifacts/**/* --title "$TAG_NAME" --generate-notes
+            gh release create "$TAG_NAME" "${assets[@]}" --title "$TAG_NAME" --generate-notes
           fi
