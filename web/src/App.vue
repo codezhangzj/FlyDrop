@@ -64,6 +64,8 @@ const tabs = [
 const badgeCount = computed(() =>
   transfersStore.awaitingTransfers.length + transfersStore.readyTransfers.length
 )
+// 群聊未读数（显示在「设备」tab，群聊入口所在页）
+const groupBadge = computed(() => groupsStore.totalUnread)
 
 // 全局拖拽发送
 const globalDragging = ref(false)
@@ -124,7 +126,14 @@ onMounted(() => {
         break
       case 'transfer:offer':
         transfersStore.addIncoming(msg.payload)
-        if (settings.notify) systemNotify('收到新文件', `来自 ${msg.payload.fromDeviceName ?? '未知设备'} 的 ${msg.payload.files?.length ?? 0} 个文件`)
+        // 群聊消息：若不在该群页面内，累加未读
+        if (msg.payload.groupId) {
+          groupsStore.incUnread(msg.payload.groupId)
+        }
+        if (settings.notify) {
+          const title = msg.payload.groupName ? `群聊「${msg.payload.groupName}」有新文件` : '收到新文件'
+          systemNotify(title, `来自 ${msg.payload.fromDeviceName ?? '未知设备'} 的 ${msg.payload.files?.length ?? 0} 个文件`)
+        }
         if (settings.sound) playBeep()
         break
       case 'transfer:progress':
@@ -199,6 +208,7 @@ onUnmounted(() => {
         <component :is="tab.icon" :size="20" />
         <span class="nav-label">{{ tab.label }}</span>
         <span v-if="tab.path === '/inbox' && badgeCount > 0" class="badge">{{ badgeCount }}</span>
+        <span v-else-if="tab.path === '/devices' && groupBadge > 0" class="badge">{{ groupBadge }}</span>
       </router-link>
     </nav>
 
@@ -221,6 +231,7 @@ onUnmounted(() => {
         <component :is="tab.icon" :size="22" />
         <span class="nav-label">{{ tab.label }}</span>
         <span v-if="tab.path === '/inbox' && badgeCount > 0" class="badge">{{ badgeCount }}</span>
+        <span v-else-if="tab.path === '/devices' && groupBadge > 0" class="badge">{{ groupBadge }}</span>
       </router-link>
     </nav>
 

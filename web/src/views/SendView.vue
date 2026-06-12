@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDevicesStore } from '../stores/devices'
 import { useGroupsStore } from '../stores/groups'
@@ -13,7 +13,7 @@ import { takePendingFiles } from '../services/pendingFiles'
 import { useDownload } from '../composables/useDownload'
 import {
   ArrowLeft, FolderOpen, FileText, Image as ImageIcon, X,
-  Files, Type, Send, Loader, Film, Download, Check
+  Files, Type, Send, Loader, Film, Download, Check, Copy
 } from 'lucide-vue-next'
 
 const props = defineProps<{ targetId: string }>()
@@ -48,16 +48,76 @@ function scrollToBottom() {
     chatScroll.value.scrollTop = chatScroll.value.scrollHeight
   }
 }
-// 监听新消息自动滚动
-onMounted(() => {
-  if (targetGroup.value) {
-    setTimeout(scrollToBottom, 100)
-    setInterval(() => {
-      // 简单轮询确保如果有新消息（或者刚进页面）滚动到底部
-      // 真实场景可以用 watch 监听 groupTransfers 的变化
-    }, 1000)
-  }
-})
+
+// 监听群聊消息变化 → 自动滚动到底部（替代旧的空轮询）
+watch(
+  () => groupTransfers.value.length,
+  () => { if (targetGroup.value) nextTick(scrollToBottom) }
+)
+// 监听进行中消息的进度变化，保持视图贴底
+watch(
+  () => groupTransfers.value.map(t => t.status).join(','),
+  () => { if (targetGroup.value) nextTick(scrollToBottom) }
+)
+
+// 我的设备 ID（用于预览/流式鉴权）
+const myDeviceId = computed(() => devicesStore.myDevice?.deviceId ?? '')
+function previewUrl(transferId: string, fileId: string) {
+  return `/api/preview/${transferId}/${fileId}?deviceId=${encodeURIComponent(myDeviceId.value)}`
+}
+function streamUrl(transferId: string, fileId: string) {
+  return `/api/stream/${transferId}/${fileId}?deviceId=${encodeURIComponent(myDeviceId.value)}`
+}
+function isImage(mime: string) { return mime.startsWith('image/') }
+function canPreview(t: TransferItem) {
+  return t.status === 'ready' || t.status === 'completed'
+}
+
+// 文本消息内联展示
+function isTextTransfer(t: TransferItem) {
+  if (t.files.length !== 1) return false
+  const f = t.files[0]
+  return (f.mime.startsWith('text/') || f.name.toLowerCase().endsWith('.txt')) && f.size <= 64 * 1024
+}
+const textCache = ref<Record<string, string>>({})
+async function ensureText(t: TransferItem) {
+  if (textCache.value[t.transferId] != null) return
+  if (!canPreview(t)) return
+  try {
+    const res = await fetch(streamUrl(t.transferId, t.files[0].fileId))
+    if (res.ok) textCache.value = { ...textCache.value, [t.transferId]: await res.text() }
+  } catch {}
+}
+async function copyText(t: TransferItem) {
+  const text = textCache.value[t.transferId] ?? ''
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
+    }
+    toast.success('已复制文本')
+  } catch { toast.error('复制失败') }
+}
+
+// 图片大图浏览
+const lightbox = ref<{ url: string; name: string } | null>(null)
+function openImage(transferId: string, fileId: string, name: string) {
+  lightbox.value = { url: streamUrl(transferId, fileId), name }
+}
+function closeLightbox() { lightbox.value = null }
+
+// 群聊消息变化时，预取文本内容
+watch(groupTransfers, (list) => {
+  list.forEach(t => { if (isTextTransfer(t)) ensureText(t) })
+}, { immediate: true, deep: true })
+
+// 进入/离开群聊：标记已读 / 清理当前群
+watch(() => targetGroup.value?.groupId, (gid) => {
+  groupsStore.setActiveGroup(gid ?? null)
+}, { immediate: true })
 
 const tab = ref<'file' | 'text'>('file')
 const textContent = ref('')
@@ -114,12 +174,15 @@ onMounted(() => {
     addFiles(pf)
     toast.info(`已带入 ${pf.length} 个文件`)
   }
+  if (targetGroup.value) nextTick(scrollToBottom)
 })
 
 onUnmounted(() => {
   window.removeEventListener('focus', onWindowFocus)
   if (prepareSafetyTimer) clearTimeout(prepareSafetyTimer)
   previews.value.forEach(u => { if (u) URL.revokeObjectURL(u) })
+  // 离开群聊页：清除「正在查看」标记
+  groupsStore.setActiveGroup(null)
 })
 
 // 点击「选择文件」：进入等待选择状态
@@ -296,6 +359,7 @@ async function send() {
         file: localFile,
         transferId,
         fileId: meta.fileId,
+        deviceId: myDeviceId.value,
         signal: abortController.signal,
         onProgress: (uploaded) => {
           const overall = totalUploaded + uploaded
@@ -377,14 +441,30 @@ function fileIcon(type: string) {
       <div v-for="t in groupTransfers" :key="t.transferId" class="chat-msg" :class="{ me: t.direction === 'outgoing' }">
         <div class="chat-avatar">{{ t.direction === 'outgoing' ? '我' : (t.peerName || '未知') }}</div>
         <div class="chat-bubble">
-          <div class="chat-files">
+          <!-- 文本消息：内联气泡展示 -->
+          <div v-if="isTextTransfer(t) && canPreview(t)" class="chat-text">
+            <pre class="chat-text-content">{{ textCache[t.transferId] ?? '加载中…' }}</pre>
+            <button class="chat-text-copy" aria-label="复制文本" @click="copyText(t)" title="复制">
+              <Copy :size="13" />
+            </button>
+          </div>
+
+          <!-- 文件 / 图片消息 -->
+          <div v-else class="chat-files">
             <div v-for="f in t.files" :key="f.fileId" class="chat-file">
-              <component :is="fileIcon(f.mime)" :size="18" class="chat-file-icon" />
+              <img
+                v-if="isImage(f.mime) && canPreview(t)"
+                :src="previewUrl(t.transferId, f.fileId)"
+                class="chat-thumb"
+                alt="预览"
+                @click="openImage(t.transferId, f.fileId, f.name)"
+              />
+              <component v-else :is="fileIcon(f.mime)" :size="18" class="chat-file-icon" />
               <div class="chat-file-info">
                 <div class="chat-file-name">{{ f.name }}</div>
                 <div class="chat-file-size">{{ formatSize(f.size) }}</div>
               </div>
-              <div class="chat-file-actions" v-if="t.direction === 'incoming' && (t.status === 'ready' || t.status === 'completed')">
+              <div class="chat-file-actions" v-if="t.direction === 'incoming' && canPreview(t)">
                 <template v-if="dl(f.fileId)">
                   <button v-if="dl(f.fileId)?.status === 'downloading'" class="icon-btn-small" disabled title="下载中">
                     <Loader :size="14" class="spin" />
@@ -509,6 +589,14 @@ function fileIcon(type: string) {
         </div>
       </div>
     </transition>
+
+    <!-- 图片大图浏览 -->
+    <transition name="modal">
+      <div v-if="lightbox" class="lightbox" @click="closeLightbox">
+        <img :src="lightbox.url" :alt="lightbox.name" class="lightbox-img" />
+        <button class="lightbox-close" aria-label="关闭" @click="closeLightbox"><X :size="22" /></button>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -563,6 +651,40 @@ function fileIcon(type: string) {
 .icon-btn-small:disabled { opacity: 0.6; cursor: not-allowed; }
 .done-mark { color: var(--color-success); margin-left: 6px; display: flex; align-items: center; }
 .chat-status { font-size: 0.75rem; margin-top: 6px; text-align: right; opacity: 0.8; }
+
+/* 群聊图片缩略图 */
+.chat-thumb {
+  width: 44px; height: 44px; object-fit: cover; border-radius: 6px;
+  flex-shrink: 0; cursor: zoom-in;
+}
+/* 群聊文本气泡 */
+.chat-text { display: flex; align-items: flex-start; gap: 8px; }
+.chat-text-content {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-size: 0.88rem; line-height: 1.45; font-family: inherit;
+  max-height: 240px; overflow: auto; flex: 1;
+}
+.chat-text-copy {
+  background: rgba(0,0,0,0.1); border: none; border-radius: 5px; cursor: pointer;
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  color: inherit; flex-shrink: 0; opacity: 0.7;
+}
+.chat-text-copy:hover { opacity: 1; }
+.chat-msg.me .chat-text-copy { background: rgba(255,255,255,0.2); }
+
+/* 图片大图浏览 */
+.lightbox {
+  position: fixed; inset: 0; z-index: 2300; background: rgba(0,0,0,0.85);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.lightbox-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+.lightbox-close {
+  position: absolute; top: 16px; right: 16px;
+  width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255,255,255,0.15); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.lightbox-close:hover { background: rgba(255,255,255,0.3); }
 
 .seg { display: flex; background: var(--color-bg); padding: 4px; border-radius: 8px; width: max-content; margin-bottom: 16px; flex-shrink: 0; }
 .seg-btn {

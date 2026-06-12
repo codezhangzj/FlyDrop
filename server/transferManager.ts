@@ -47,6 +47,17 @@ export class TransferManager {
     const safeFiles = this.safeFiles(input.files)
 
     const totalBytes = safeFiles.reduce((s, f) => s + f.size, 0)
+
+    // 大小上限校验：单文件与总量均不得超过 maxFileSize
+    const sizeError = this.checkSizeLimit(safeFiles, totalBytes)
+    if (sizeError) {
+      this.deviceMgr.send(input.fromDeviceId, {
+        type: 'transfer:error',
+        payload: { transferId: '', error: sizeError }
+      })
+      return null
+    }
+
     const fromDevice = this.deviceMgr.get(input.fromDeviceId)
     const fromDeviceName = fromDevice?.displayName ?? '未知设备'
     const t: TransferEntry = {
@@ -113,6 +124,17 @@ export class TransferManager {
     const transferId = uuid()
     const safeFiles = this.safeFiles(input.files)
     const totalBytes = safeFiles.reduce((s, f) => s + f.size, 0)
+
+    // 大小上限校验：单文件与总量均不得超过 maxFileSize
+    const sizeError = this.checkSizeLimit(safeFiles, totalBytes)
+    if (sizeError) {
+      this.deviceMgr.send(input.fromDeviceId, {
+        type: 'transfer:error',
+        payload: { transferId: '', error: sizeError }
+      })
+      return null
+    }
+
     const fromDevice = this.deviceMgr.get(input.fromDeviceId)
     const fromDeviceName = fromDevice?.displayName ?? '未知设备'
 
@@ -202,20 +224,39 @@ export class TransferManager {
 
   /**
    * 接收分块。
+   * @param args.byDeviceId 上传请求声明的设备 ID（用于鉴权：仅发送方可上传）
    */
   async ingestChunk(args: {
     transferId: string
     fileId: string
     chunkIndex: number
     chunkBuffer: Buffer
+    byDeviceId?: string
   }): Promise<{ done: boolean; uploadedBytes: number }> {
     const t = this.transfers.get(args.transferId)
     if (!t) throw new Error('transfer not found')
     if (t.status === 'expired' || t.status === 'failed') throw new Error('transfer closed')
 
-    if (t.status === 'pending') t.status = 'uploading'
+    // 鉴权：仅该传输的发送方可上传分片，杜绝局域网内任意设备注入/篡改分片
+    if (args.byDeviceId !== t.fromDeviceId) {
+      throw new Error('unauthorized uploader')
+    }
 
-    await this.storage.writeChunk(t.transferId, args.fileId, args.chunkIndex, args.chunkBuffer)
+    // 文件归属校验：fileId 必须属于本传输，避免写入未知文件占用磁盘
+    const fileMeta = t.files.find(f => f.fileId === args.fileId)
+    if (!fileMeta) throw new Error('unknown fileId')
+
+    // 分片索引越界校验
+    if (args.chunkIndex < 0 || args.chunkIndex >= fileMeta.totalChunks) {
+      throw new Error('chunkIndex out of range')
+    }
+
+    // 分片大小上限（防止单片过大耗尽磁盘）
+    if (args.chunkBuffer.length > config.chunkSize * 2) {
+      throw new Error('chunk too large')
+    }
+
+    if (t.status === 'pending') t.status = 'uploading'
 
     // 幂等：检查是否已记录
     let set = t.receivedChunks.get(args.fileId)
@@ -224,7 +265,17 @@ export class TransferManager {
       t.receivedChunks.set(args.fileId, set)
     }
 
-    if (!set.has(args.chunkIndex)) {
+    // 仅在该分片首次到达时落盘并计数，避免重复写入/重复累加
+    const isNewChunk = !set.has(args.chunkIndex)
+
+    // 上传总量上限：防止声明大小之外的超量写入耗尽磁盘
+    if (isNewChunk && t.uploadedBytes + args.chunkBuffer.length > t.totalBytes) {
+      throw new Error('upload exceeds declared size')
+    }
+
+    await this.storage.writeChunk(t.transferId, args.fileId, args.chunkIndex, args.chunkBuffer)
+
+    if (isNewChunk) {
       set.add(args.chunkIndex)
       t.uploadedBytes += args.chunkBuffer.length
     }
@@ -237,9 +288,8 @@ export class TransferManager {
     this.deviceMgr.send(t.fromDeviceId, progressMsg)
     this.sendToRecipients(t, progressMsg)
 
-    // 检查文件是否完成
-    const fileMeta = t.files.find(f => f.fileId === args.fileId)
-    if (fileMeta && set.size === fileMeta.totalChunks && !t.assembledFiles.has(args.fileId)) {
+    // 检查文件是否完成（fileMeta 已在上方解析并校验）
+    if (set.size === fileMeta.totalChunks && !t.assembledFiles.has(args.fileId)) {
       // 拼接文件
       const outPath = await this.storage.assemble(t.transferId, args.fileId, fileMeta.totalChunks, fileMeta.name)
       // 完整性校验：拼接后实际大小需与声明大小一致
@@ -381,6 +431,23 @@ export class TransferManager {
       ...f,
       name: sanitizeFileName(f.name),
     }))
+  }
+
+  /**
+   * 校验文件大小是否超限。返回错误信息（超限）或 null（通过）。
+   * - 单文件不得超过 maxFileSize
+   * - 传输总量不得超过 maxFileSize
+   */
+  private checkSizeLimit(files: FileMeta[], totalBytes: number): string | null {
+    for (const f of files) {
+      if (f.size > config.maxFileSize) {
+        return `文件「${f.name}」超过单文件大小上限`
+      }
+    }
+    if (totalBytes > config.maxFileSize) {
+      return '本次传输总量超过大小上限'
+    }
+    return null
   }
 
   private groupRecipientIds(fromDeviceId: string): string[] {

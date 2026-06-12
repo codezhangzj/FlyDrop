@@ -9,6 +9,7 @@ export function registerUploadRoutes(app: FastifyInstance, transferMgr: Transfer
     let transferId = ''
     let fileId = ''
     let chunkIndex = -1
+    let deviceId = ''
     let chunkBuf: Buffer | null = null
 
     for await (const part of parts) {
@@ -22,6 +23,7 @@ export function registerUploadRoutes(app: FastifyInstance, transferMgr: Transfer
         if (part.fieldname === 'transferId') transferId = String(part.value)
         if (part.fieldname === 'fileId') fileId = String(part.value)
         if (part.fieldname === 'chunkIndex') chunkIndex = Number(part.value)
+        if (part.fieldname === 'deviceId') deviceId = String(part.value)
       }
     }
 
@@ -35,18 +37,25 @@ export function registerUploadRoutes(app: FastifyInstance, transferMgr: Transfer
     }
 
     try {
-      const result = await transferMgr.ingestChunk({ transferId, fileId, chunkIndex, chunkBuffer: chunkBuf })
+      const result = await transferMgr.ingestChunk({ transferId, fileId, chunkIndex, chunkBuffer: chunkBuf, byDeviceId: deviceId })
       return { ok: true, ...result }
     } catch (e: any) {
-      return reply.code(400).send({ error: e.message })
+      // 鉴权失败返回 403，其余按 400 处理
+      const code = e?.message === 'unauthorized uploader' ? 403 : 400
+      return reply.code(code).send({ error: e.message })
     }
   })
 
   // 查询已接收分块（断点续传）
   app.get('/api/upload/status', async (req, reply) => {
-    const { transferId, fileId } = req.query as { transferId?: string; fileId?: string }
+    const { transferId, fileId, deviceId } = req.query as { transferId?: string; fileId?: string; deviceId?: string }
     if (!transferId || !fileId) {
       return reply.code(400).send({ error: '缺少 transferId 或 fileId' })
+    }
+    // 鉴权：仅该传输的发送方可查询续传状态
+    const t = transferMgr.get(transferId)
+    if (!t || t.fromDeviceId !== deviceId) {
+      return reply.code(403).send({ error: '无权限' })
     }
     const chunks = transferMgr.getReceivedChunks(transferId, fileId)
     return { transferId, fileId, receivedChunks: chunks }

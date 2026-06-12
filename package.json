@@ -103,7 +103,7 @@
     }
   },
   "optionalDependencies": {
-    "@img/sharp-win32-arm64": "^0.35.1",
-    "@img/sharp-win32-x64": "^0.35.1"
+    "@img/sharp-win32-ia32": "0.33.5",
+    "@img/sharp-win32-x64": "0.33.5"
   }
 }

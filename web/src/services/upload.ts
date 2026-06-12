@@ -5,6 +5,7 @@ export interface UploadOptions {
   file: File
   transferId: string
   fileId: string
+  deviceId: string
   onProgress?: (uploaded: number, total: number) => void
   signal?: AbortSignal
 }
@@ -19,7 +20,7 @@ export async function uploadFile(opts: UploadOptions): Promise<void> {
   // 先查询已上传分块（断点续传）
   let receivedSet = new Set<number>()
   try {
-    const res = await fetch(`/api/upload/status?transferId=${opts.transferId}&fileId=${opts.fileId}`)
+    const res = await fetch(`/api/upload/status?transferId=${opts.transferId}&fileId=${opts.fileId}&deviceId=${encodeURIComponent(opts.deviceId)}`)
     if (res.ok) {
       const data = await res.json()
       receivedSet = new Set(data.receivedChunks || [])
@@ -56,6 +57,7 @@ export async function uploadFile(opts: UploadOptions): Promise<void> {
       fd.append('transferId', opts.transferId)
       fd.append('fileId', opts.fileId)
       fd.append('chunkIndex', String(idx))
+      fd.append('deviceId', opts.deviceId)
       fd.append('chunk', blob)
 
       await retry(() => fetch('/api/upload', {

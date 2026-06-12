@@ -44,7 +44,7 @@ describe('TransferManager', () => {
     const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
     const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [meta('f1', 1, 16)] })!
     expect(t.status).toBe('pending')
-    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(16, 1) })
+    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(16, 1), byDeviceId: from.deviceId })
     expect(tm.get(t.transferId)!.status).toBe('ready')
   })
 
@@ -52,11 +52,11 @@ describe('TransferManager', () => {
     const from = dm.register(fakeSocket() as any, 'ua', '1.1.1.1', false)
     const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
     const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [meta('f1', 2, 10)] })!
-    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(10, 1) })
-    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(10, 1) }) // 重复
+    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(10, 1), byDeviceId: from.deviceId })
+    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(10, 1), byDeviceId: from.deviceId }) // 重复
     expect(tm.get(t.transferId)!.uploadedBytes).toBe(10) // 仅计一次
     expect(tm.get(t.transferId)!.status).toBe('uploading')
-    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 1, chunkBuffer: Buffer.alloc(10, 2) })
+    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 1, chunkBuffer: Buffer.alloc(10, 2), byDeviceId: from.deviceId })
     expect(tm.get(t.transferId)!.uploadedBytes).toBe(20)
     expect(tm.get(t.transferId)!.status).toBe('ready')
   })
@@ -66,7 +66,7 @@ describe('TransferManager', () => {
     const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
     const other = dm.register(fakeSocket() as any, 'ua', '1.1.1.3', false)
     const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [meta('f1', 1, 8)] })!
-    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(8, 1) })
+    await tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(8, 1), byDeviceId: from.deviceId })
     expect(tm.authorizeDownload(t.transferId, to.deviceId)).toBe(true)
     expect(tm.authorizeDownload(t.transferId, from.deviceId)).toBe(false)
     expect(tm.authorizeDownload(t.transferId, other.deviceId)).toBe(false)
@@ -96,8 +96,63 @@ describe('TransferManager', () => {
     // 声明 size=100 但实际只发 10 字节单分片
     const badMeta = { fileId: 'bad', name: 'bad.bin', size: 100, mime: 'application/octet-stream', totalChunks: 1, chunkSize: 100 }
     const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [badMeta] })!
-    await tm.ingestChunk({ transferId: t.transferId, fileId: 'bad', chunkIndex: 0, chunkBuffer: Buffer.alloc(10, 1) })
+    await tm.ingestChunk({ transferId: t.transferId, fileId: 'bad', chunkIndex: 0, chunkBuffer: Buffer.alloc(10, 1), byDeviceId: from.deviceId })
     expect(tm.get(t.transferId)!.status).toBe('failed')
+  })
+
+  // ---- P0 安全：上传鉴权 ----
+  it('上传鉴权：非发送方上传分片被拒绝', async () => {
+    const from = dm.register(fakeSocket() as any, 'ua', '1.1.1.1', false)
+    const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
+    const attacker = dm.register(fakeSocket() as any, 'ua', '1.1.1.9', false)
+    const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [meta('f1', 1, 8)] })!
+    // 攻击者用别的 deviceId 注入分片
+    await expect(
+      tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(8, 9), byDeviceId: attacker.deviceId })
+    ).rejects.toThrow('unauthorized uploader')
+    // 缺省 deviceId 也应被拒
+    await expect(
+      tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(8, 9) })
+    ).rejects.toThrow('unauthorized uploader')
+    // 传输未被污染
+    expect(tm.get(t.transferId)!.uploadedBytes).toBe(0)
+  })
+
+  it('上传校验：未知 fileId 被拒绝', async () => {
+    const from = dm.register(fakeSocket() as any, 'ua', '1.1.1.1', false)
+    const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
+    const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [meta('f1', 1, 8)] })!
+    await expect(
+      tm.ingestChunk({ transferId: t.transferId, fileId: 'ghost', chunkIndex: 0, chunkBuffer: Buffer.alloc(8, 1), byDeviceId: from.deviceId })
+    ).rejects.toThrow('unknown fileId')
+  })
+
+  it('上传校验：分片索引越界被拒绝', async () => {
+    const from = dm.register(fakeSocket() as any, 'ua', '1.1.1.1', false)
+    const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
+    const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [meta('f1', 2, 8)] })!
+    await expect(
+      tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 5, chunkBuffer: Buffer.alloc(8, 1), byDeviceId: from.deviceId })
+    ).rejects.toThrow('out of range')
+  })
+
+  it('上传校验：超出声明总量被拒绝', async () => {
+    const from = dm.register(fakeSocket() as any, 'ua', '1.1.1.1', false)
+    const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
+    // 声明 totalChunks=1、size=8，但实际发 32 字节
+    const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [meta('f1', 1, 8)] })!
+    await expect(
+      tm.ingestChunk({ transferId: t.transferId, fileId: 'f1', chunkIndex: 0, chunkBuffer: Buffer.alloc(32, 1), byDeviceId: from.deviceId })
+    ).rejects.toThrow('exceeds declared size')
+  })
+
+  // ---- P0 安全：文件大小上限 ----
+  it('大小上限：超过 maxFileSize 的文件不创建任务', () => {
+    const from = dm.register(fakeSocket() as any, 'ua', '1.1.1.1', false)
+    const to = dm.register(fakeSocket() as any, 'ua', '1.1.1.2', false)
+    const huge = { fileId: 'big', name: 'big.bin', size: 11 * 1024 * 1024 * 1024, mime: 'application/octet-stream', totalChunks: 1, chunkSize: 4 * 1024 * 1024 }
+    const t = tm.createOffer({ fromDeviceId: from.deviceId, toDeviceId: to.deviceId, files: [huge] })
+    expect(t).toBeNull()
   })
 
   // 属性：任意乱序+重复的分片到达顺序，最终都能完成且字节数正确
@@ -118,7 +173,7 @@ describe('TransferManager', () => {
           const j = Math.floor(Math.random() * (i + 1));[order[i], order[j]] = [order[j], order[i]]
         }
         for (const idx of order) {
-          await tm.ingestChunk({ transferId: t.transferId, fileId, chunkIndex: idx, chunkBuffer: Buffer.alloc(chunkLen, idx + 1) })
+          await tm.ingestChunk({ transferId: t.transferId, fileId, chunkIndex: idx, chunkBuffer: Buffer.alloc(chunkLen, idx + 1), byDeviceId: from.deviceId })
         }
         const tr = tm.get(t.transferId)!
         expect(tr.status).toBe('ready')

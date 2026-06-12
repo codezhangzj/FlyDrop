@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useDevicesStore } from '../stores/devices'
 import { useGroupsStore } from '../stores/groups'
 import { useRouter } from 'vue-router'
@@ -26,6 +26,14 @@ const dragOverId = ref<string | null>(null)
 const editingName = ref(false)
 const nameInput = ref('')
 
+// 创建群聊弹窗
+const showCreateGroup = ref(false)
+const groupNameInput = ref('')
+const groupNameField = ref<HTMLInputElement | null>(null)
+
+// 在线设备总数（含本机），用于群卡片展示成员规模
+const onlineCount = computed(() => devicesStore.devices.length || 1)
+
 onMounted(async () => {
   if (desktop) serverInfo.value = await getServerInfo()
 })
@@ -43,12 +51,21 @@ function sendTo(deviceId: string) {
   router.push(`/send/${deviceId}`)
 }
 
-function createGroup() {
-  const name = prompt('请输入群聊名称', '局域网群聊')
-  if (name !== null) {
-    wsClient.send({ type: 'group:create', payload: { name: name || '局域网群聊' } })
-    toast.success('已发送创建群聊请求')
-  }
+function openCreateGroup() {
+  groupNameInput.value = ''
+  showCreateGroup.value = true
+  nextTick(() => groupNameField.value?.focus())
+}
+
+function confirmCreateGroup() {
+  const name = groupNameInput.value.trim() || '局域网群聊'
+  wsClient.send({ type: 'group:create', payload: { name } })
+  toast.success('已创建群聊')
+  showCreateGroup.value = false
+}
+
+function cancelCreateGroup() {
+  showCreateGroup.value = false
 }
 
 // 拖文件到设备卡片直接发送
@@ -168,12 +185,15 @@ function saveName() {
 
     <!-- 群聊列表 -->
     <div class="section-header">
-      <h2 class="page-title">局域网大厅</h2>
+      <h2 class="page-title">群聊</h2>
+      <button class="btn btn-secondary btn-sm" @click="openCreateGroup">
+        <Plus :size="15" /> 创建群聊
+      </button>
     </div>
 
     <div v-if="groupsStore.groups.length === 0" class="empty-state" style="padding: 30px 0;">
       <Users :size="40" class="empty-icon" style="opacity: 0.5" />
-      <p style="margin-top: 8px;">暂无群聊</p>
+      <p style="margin-top: 8px;">暂无群聊，点击右上角创建</p>
     </div>
 
     <div v-else class="devices-grid">
@@ -196,8 +216,11 @@ function saveName() {
           <Users :size="24" />
         </div>
         <div class="device-info">
-          <div class="device-name">{{ group.name }}</div>
-          <div class="device-meta">创建者: {{ group.ownerName || '未知' }}</div>
+          <div class="device-name">
+            {{ group.name }}
+            <span v-if="groupsStore.unreadFor(group.groupId) > 0" class="badge">{{ groupsStore.unreadFor(group.groupId) }}</span>
+          </div>
+          <div class="device-meta">{{ onlineCount }} 台设备在线 · 群发给所有人</div>
         </div>
         <Send :size="18" class="send-hint" />
         <div v-if="dragOverId === group.groupId" class="drop-tip">松开即发送</div>
@@ -228,6 +251,30 @@ function saveName() {
       </div>
       <p class="me-meta">{{ devicesStore.myFullDevice.os }} · {{ devicesStore.myFullDevice.browser }} · {{ devicesStore.myFullDevice.ip }}</p>
     </div>
+
+    <!-- 创建群聊弹窗 -->
+    <transition name="modal">
+      <div v-if="showCreateGroup" class="overlay" @click.self="cancelCreateGroup">
+        <div class="dialog card">
+          <h3 class="dialog-title"><Users :size="18" /> 创建群聊</h3>
+          <p class="dialog-hint">群聊里发送的文件会推送给当前局域网内的所有设备。</p>
+          <input
+            ref="groupNameField"
+            v-model="groupNameInput"
+            class="name-input dialog-input"
+            maxlength="32"
+            placeholder="输入群聊名称（如：客厅）"
+            aria-label="群聊名称"
+            @keyup.enter="confirmCreateGroup"
+            @keyup.esc="cancelCreateGroup"
+          />
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" @click="cancelCreateGroup">取消</button>
+            <button class="btn btn-primary" @click="confirmCreateGroup"><Plus :size="16" /> 创建</button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -322,4 +369,21 @@ function saveName() {
   background: var(--color-surface); color: var(--color-text);
 }
 .me-meta { font-size: 0.8rem; color: var(--color-text-secondary); margin-top: 6px; }
+
+/* 创建群聊弹窗 */
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 20px;
+}
+.dialog { width: 100%; max-width: 380px; }
+.dialog-title { display: flex; align-items: center; gap: 8px; font-size: 1.05rem; margin-bottom: 6px; }
+.dialog-hint { font-size: 0.82rem; color: var(--color-text-secondary); margin-bottom: 14px; line-height: 1.5; }
+.dialog-input { width: 100%; max-width: none; margin-bottom: 16px; }
+.dialog-actions { display: flex; gap: 10px; }
+.dialog-actions .btn { flex: 1; }
+
+.modal-enter-active, .modal-leave-active { transition: opacity 0.2s ease; }
+.modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-active .dialog, .modal-leave-active .dialog { transition: transform 0.2s ease; }
+.modal-enter-from .dialog, .modal-leave-to .dialog { transform: scale(0.94); }
 </style>

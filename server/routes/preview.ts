@@ -1,8 +1,24 @@
 import type { FastifyInstance } from 'fastify'
-import sharp from 'sharp'
 import fs from 'fs'
 import { TransferManager } from '../transferManager.js'
 import { StorageManager } from '../storage.js'
+import { log } from '../utils/logger.js'
+
+// 惰性加载 sharp：原生模块在某些平台/打包环境可能缺失，
+// 不能在模块顶层 import，否则会导致主进程启动即崩溃。
+type SharpModule = typeof import('sharp')
+let sharpModule: SharpModule | null | undefined // undefined=未尝试, null=不可用
+async function loadSharp(): Promise<SharpModule | null> {
+  if (sharpModule !== undefined) return sharpModule
+  try {
+    const mod = await import('sharp')
+    sharpModule = (mod.default ?? mod) as SharpModule
+  } catch (e) {
+    sharpModule = null
+    log('warn', 'sharp 不可用，缩略图将回退为原图', { error: e instanceof Error ? e.message : String(e) })
+  }
+  return sharpModule
+}
 
 export function registerPreviewRoutes(
   app: FastifyInstance,
@@ -35,6 +51,15 @@ export function registerPreviewRoutes(
       return reply.code(404).send({ error: '文件数据不存在' })
     }
 
+    const sharp = await loadSharp()
+
+    // sharp 不可用：回退为直接返回原图（仍可预览，只是不缩小）
+    if (!sharp) {
+      reply.header('Content-Type', file.mime)
+      reply.header('Cache-Control', 'public, max-age=3600')
+      return reply.send(fs.createReadStream(fullPath))
+    }
+
     try {
       const thumbnail = await sharp(fullPath)
         .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
@@ -45,7 +70,11 @@ export function registerPreviewRoutes(
       reply.header('Cache-Control', 'public, max-age=3600')
       return reply.send(thumbnail)
     } catch (e) {
-      return reply.code(500).send({ error: '缩略图生成失败' })
+      // 生成失败也回退为原图，而不是 500
+      log('warn', '缩略图生成失败，回退原图', { transferId, fileId, error: e instanceof Error ? e.message : String(e) })
+      reply.header('Content-Type', file.mime)
+      reply.header('Cache-Control', 'public, max-age=3600')
+      return reply.send(fs.createReadStream(fullPath))
     }
   })
 }
