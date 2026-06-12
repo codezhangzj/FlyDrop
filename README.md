@@ -112,6 +112,8 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+> 发版的完整流程、版本号约定和注意事项见 [RELEASING.md](RELEASING.md)。
+
 ## 使用方法
 
 1. 在电脑上运行桌面应用，或 `npm run preview` / `npm start`
