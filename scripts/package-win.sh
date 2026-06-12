@@ -6,8 +6,8 @@ cd "$ROOT_DIR"
 
 APP_NAME="FlyDrop"
 RELEASE_DIR="$ROOT_DIR/release"
-WINDOWS_ELECTRON_VERSION="${WINDOWS_ELECTRON_VERSION:-22.3.27}"
-WINDOWS_ARCHES="${WINDOWS_ARCHES:-x64 ia32}"
+WINDOWS_ELECTRON_VERSION="${WINDOWS_ELECTRON_VERSION:-33.4.11}"
+WINDOWS_ARCHES="${WINDOWS_ARCHES:-x64 arm64}"
 
 log() {
   printf '\033[1;34m==>\033[0m %s\n' "$1"
@@ -55,7 +55,7 @@ rm -rf "$RELEASE_DIR/win-unpacked" "$RELEASE_DIR/win-ia32-unpacked" "$RELEASE_DI
 find "$RELEASE_DIR" -maxdepth 1 \( -name '*.exe' -o -name '*.exe.blockmap' -o -name '*.nsis.7z' \) -delete 2>/dev/null || true
 
 log "Building Windows application for: $WINDOWS_ARCHES"
-log "Using Electron $WINDOWS_ELECTRON_VERSION for Windows 7 compatibility"
+log "Using Electron $WINDOWS_ELECTRON_VERSION"
 npm run build:web
 npm run build:electron
 npx electron-builder --win nsis "${builder_arch_flags[@]}" -c.electronVersion="$WINDOWS_ELECTRON_VERSION"

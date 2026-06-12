@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useDevicesStore } from '../stores/devices'
+import { useGroupsStore } from '../stores/groups'
 import { useRouter } from 'vue-router'
 import { isDesktop, getServerInfo, type ServerInfo } from '../services/desktop'
 import { wsClient } from '../services/ws'
@@ -9,9 +10,11 @@ import { setPendingFiles, pendingCount, clearPendingFiles } from '../services/pe
 import {
   Smartphone, Tablet, Monitor, HardDrive,
   Send, Pencil, Check, Copy, RadioTower, X,
+  Users, Plus,
 } from 'lucide-vue-next'
 
 const devicesStore = useDevicesStore()
+const groupsStore = useGroupsStore()
 const router = useRouter()
 const toast = useToast()
 
@@ -38,6 +41,14 @@ function deviceIcon(type: string) {
 
 function sendTo(deviceId: string) {
   router.push(`/send/${deviceId}`)
+}
+
+function createGroup() {
+  const name = prompt('请输入群聊名称', '局域网群聊')
+  if (name !== null) {
+    wsClient.send({ type: 'group:create', payload: { name: name || '局域网群聊' } })
+    toast.success('已发送创建群聊请求')
+  }
 }
 
 // 拖文件到设备卡片直接发送
@@ -155,6 +166,44 @@ function saveName() {
       </div>
     </div>
 
+    <!-- 群聊列表 -->
+    <div class="section-header">
+      <h2 class="page-title">局域网大厅</h2>
+    </div>
+
+    <div v-if="groupsStore.groups.length === 0" class="empty-state" style="padding: 30px 0;">
+      <Users :size="40" class="empty-icon" style="opacity: 0.5" />
+      <p style="margin-top: 8px;">暂无群聊</p>
+    </div>
+
+    <div v-else class="devices-grid">
+      <div
+        v-for="group in groupsStore.groups"
+        :key="group.groupId"
+        class="card device-card"
+        :class="{ 'drag-over': dragOverId === group.groupId }"
+        role="button"
+        tabindex="0"
+        :aria-label="`发送到群聊 ${group.name}`"
+        @click="sendTo(group.groupId)"
+        @keydown.enter="sendTo(group.groupId)"
+        @keydown.space.prevent="sendTo(group.groupId)"
+        @dragover="onCardDragOver($event, group.groupId)"
+        @dragleave="onCardDragLeave(group.groupId)"
+        @drop.stop="onCardDrop($event, group.groupId)"
+      >
+        <div class="device-icon">
+          <Users :size="24" />
+        </div>
+        <div class="device-info">
+          <div class="device-name">{{ group.name }}</div>
+          <div class="device-meta">创建者: {{ group.ownerName || '未知' }}</div>
+        </div>
+        <Send :size="18" class="send-hint" />
+        <div v-if="dragOverId === group.groupId" class="drop-tip">松开即发送</div>
+      </div>
+    </div>
+
     <!-- 我的设备 -->
     <div class="connection-info card" v-if="devicesStore.myFullDevice">
       <div class="me-row">
@@ -217,6 +266,10 @@ function saveName() {
   background: var(--color-surface); padding: 3px 8px; border-radius: 999px;
 }
 @media (max-width: 480px) { .connect-panel { flex-direction: column; text-align: center; } }
+
+.section-header { display: flex; justify-content: space-between; align-items: center; margin-top: 24px; margin-bottom: 16px; }
+.section-header .page-title { margin: 0; }
+.btn-sm { padding: 4px 10px; font-size: 0.85rem; height: 32px; gap: 4px; }
 
 .devices-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .device-card {

@@ -1,28 +1,63 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDevicesStore } from '../stores/devices'
-import { useTransfersStore, type FileMeta } from '../stores/transfers'
+import { useGroupsStore } from '../stores/groups'
+import { useTransfersStore, type FileMeta, type TransferItem } from '../stores/transfers'
 import { wsClient } from '../services/ws'
 import { uploadFile, calcChunks } from '../services/upload'
 import { uuidv4 } from '../services/uuid'
 import { useToast } from '../composables/useToast'
 import { formatSize, formatSpeed, formatEta } from '../services/format'
 import { takePendingFiles } from '../services/pendingFiles'
+import { useDownload } from '../composables/useDownload'
 import {
   ArrowLeft, FolderOpen, FileText, Image as ImageIcon, X,
-  Files, Type, Send, Loader, Film,
+  Files, Type, Send, Loader, Film, Download, Check
 } from 'lucide-vue-next'
 
-const props = defineProps<{ deviceId: string }>()
+const props = defineProps<{ targetId: string }>()
 const router = useRouter()
 const devicesStore = useDevicesStore()
+const groupsStore = useGroupsStore()
 const transfersStore = useTransfersStore()
 const toast = useToast()
 
 const targetDevice = computed(() =>
-  devicesStore.devices.find(d => d.deviceId === props.deviceId)
+  devicesStore.devices.find(d => d.deviceId === props.targetId)
 )
+const targetGroup = computed(() =>
+  groupsStore.groups.find(g => g.groupId === props.targetId)
+)
+const displayName = computed(() => targetDevice.value?.displayName || targetGroup.value?.name || '未知')
+
+const { dl, downloadFile, reveal, desktop } = useDownload()
+
+// 针对群组的聊天记录
+const groupTransfers = computed(() => {
+  if (!targetGroup.value) return []
+  return transfersStore.transfers
+    .filter(t => t.groupId === props.targetId)
+    .sort((a, b) => a.createdAt - b.createdAt)
+})
+const chatScroll = ref<HTMLElement | null>(null)
+
+// 自动滚动到底部
+function scrollToBottom() {
+  if (chatScroll.value) {
+    chatScroll.value.scrollTop = chatScroll.value.scrollHeight
+  }
+}
+// 监听新消息自动滚动
+onMounted(() => {
+  if (targetGroup.value) {
+    setTimeout(scrollToBottom, 100)
+    setInterval(() => {
+      // 简单轮询确保如果有新消息（或者刚进页面）滚动到底部
+      // 真实场景可以用 watch 监听 groupTransfers 的变化
+    }, 1000)
+  }
+})
 
 const tab = ref<'file' | 'text'>('file')
 const textContent = ref('')
@@ -201,10 +236,17 @@ async function send() {
     const total = files.reduce((s, f) => s + f.size, 0)
 
     // 发送 offer
-    wsClient.send({
-      type: 'transfer:offer',
-      payload: { toDeviceId: props.deviceId, files: fileMetas },
-    })
+    if (targetGroup.value) {
+      wsClient.send({
+        type: 'transfer:offer',
+        payload: { groupId: props.targetId, files: fileMetas },
+      })
+    } else {
+      wsClient.send({
+        type: 'transfer:offer',
+        payload: { toDeviceId: props.targetId, files: fileMetas },
+      })
+    }
 
     // 等待服务端创建任务，拿到 transferId
     const created = await waitMessage(m => m.type === 'transfer:created' && m.payload?.transferId, 10_000)
@@ -218,8 +260,12 @@ async function send() {
 
     transfersStore.addOutgoing({
       transferId, files: fileMetas, totalBytes: total,
-      peerName: targetDevice.value?.displayName, status: 'pending',
+      peerName: displayName.value, status: 'pending',
+      groupId: targetGroup.value ? props.targetId : undefined,
+      groupName: targetGroup.value ? targetGroup.value.name : undefined,
     })
+
+    if (targetGroup.value) nextTick(scrollToBottom)
 
     // 等待对方接受或拒绝
     const decision = await waitMessage(
@@ -273,7 +319,11 @@ async function send() {
     toast.success('发送完成')
     clearSelected()
     textContent.value = ''
-    router.push('/inbox')
+    if (!targetGroup.value) {
+      router.push('/inbox')
+    } else {
+      nextTick(scrollToBottom)
+    }
   } catch (e) {
     if (canceled || (e instanceof Error && e.message === 'aborted')) {
       toast.info('已取消发送')
@@ -309,14 +359,56 @@ function fileIcon(type: string) {
 
 <template>
   <div class="send-page" @paste="onPaste" tabindex="0">
-    <div class="send-head">
+    <div class="send-head" :class="{ 'chat-head': targetGroup }">
       <button class="icon-btn" aria-label="返回设备列表" @click="router.push('/devices')" title="返回">
         <ArrowLeft :size="18" />
       </button>
       <h2 class="page-title" style="margin:0;">
         发送到
-        <span v-if="targetDevice" class="target">{{ targetDevice.displayName }}</span>
+        <span class="target">{{ displayName }}</span>
       </h2>
+    </div>
+
+    <!-- 聊天区 (仅群组) -->
+    <div v-if="targetGroup" class="chat-history" ref="chatScroll">
+      <div v-if="groupTransfers.length === 0" class="chat-empty">
+        <p>暂无群聊记录，开始发送文件吧！</p>
+      </div>
+      <div v-for="t in groupTransfers" :key="t.transferId" class="chat-msg" :class="{ me: t.direction === 'outgoing' }">
+        <div class="chat-avatar">{{ t.direction === 'outgoing' ? '我' : (t.peerName || '未知') }}</div>
+        <div class="chat-bubble">
+          <div class="chat-files">
+            <div v-for="f in t.files" :key="f.fileId" class="chat-file">
+              <component :is="fileIcon(f.mime)" :size="18" class="chat-file-icon" />
+              <div class="chat-file-info">
+                <div class="chat-file-name">{{ f.name }}</div>
+                <div class="chat-file-size">{{ formatSize(f.size) }}</div>
+              </div>
+              <div class="chat-file-actions" v-if="t.direction === 'incoming' && (t.status === 'ready' || t.status === 'completed')">
+                <template v-if="dl(f.fileId)">
+                  <button v-if="dl(f.fileId)?.status === 'downloading'" class="icon-btn-small" disabled title="下载中">
+                    <Loader :size="14" class="spin" />
+                  </button>
+                  <button v-else-if="dl(f.fileId)?.status === 'done' && desktop" class="icon-btn-small" title="打开所在文件夹" @click="reveal(dl(f.fileId)?.savePath)">
+                    <FolderOpen :size="14" />
+                  </button>
+                  <span v-else-if="dl(f.fileId)?.status === 'done'" class="done-mark" title="已下载">
+                    <Check :size="14" />
+                  </span>
+                  <button v-else class="icon-btn-small" title="重试下载" @click="downloadFile(t.transferId, f.fileId, f.name)">
+                    <Download :size="14" />
+                  </button>
+                </template>
+                <button v-else class="icon-btn-small" title="下载" @click="downloadFile(t.transferId, f.fileId, f.name)">
+                  <Download :size="14" />
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-if="t.status === 'uploading' || t.status === 'pending'" class="chat-status uploading">传输中...</div>
+          <div v-else-if="t.status === 'completed' || t.status === 'ready'" class="chat-status ready">已完成</div>
+        </div>
+      </div>
     </div>
 
     <!-- 模式切换 -->
@@ -421,16 +513,10 @@ function fileIcon(type: string) {
 </template>
 
 <style scoped>
-.send-page { max-width: 600px; margin: 0 auto; outline: none; }
-
-.send-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.target { color: var(--color-primary); font-weight: 600; }
+.send-page { max-width: 700px; margin: 0 auto; display: flex; flex-direction: column; height: 100%; outline: none; }
+.send-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-shrink: 0; }
+.send-head.chat-head { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--color-border); }
+.target { color: var(--color-primary); }
 
 .icon-btn {
   background: var(--color-surface);
@@ -442,97 +528,96 @@ function fileIcon(type: string) {
 }
 .icon-btn:hover { background: var(--color-bg); }
 
-.seg {
-  display: flex;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 4px;
-  gap: 4px;
-  margin-bottom: 16px;
-}
-.seg-btn {
+.chat-history {
   flex: 1;
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 8px; border: none; background: transparent;
-  border-radius: 6px; cursor: pointer; font-size: 0.9rem;
-  color: var(--color-text-secondary); min-height: 40px;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border: 1px solid var(--color-border);
 }
-.seg-btn.active { background: var(--color-surface); color: var(--color-primary); box-shadow: var(--shadow); }
+.chat-empty { text-align: center; color: var(--color-text-secondary); font-size: 0.9rem; padding: 40px 0; }
+.chat-msg { display: flex; flex-direction: column; align-items: flex-start; max-width: 85%; }
+.chat-msg.me { align-self: flex-end; align-items: flex-end; }
+.chat-avatar { font-size: 0.75rem; color: var(--color-text-secondary); margin-bottom: 4px; padding: 0 4px; }
+.chat-bubble {
+  background: var(--color-bg); padding: 10px 14px; border-radius: 12px;
+  border: 1px solid var(--color-border);
+}
+.chat-msg.me .chat-bubble { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.chat-files { display: flex; flex-direction: column; gap: 8px; }
+.chat-file { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.1); padding: 6px 10px; border-radius: 8px; }
+.chat-msg.me .chat-file { background: rgba(255,255,255,0.15); }
+.chat-file-icon { flex-shrink: 0; opacity: 0.8; }
+.chat-file-info { min-width: 0; }
+.chat-file-name { font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+.chat-file-size { font-size: 0.7rem; opacity: 0.7; }
+.chat-file-actions { margin-left: auto; display: flex; align-items: center; }
+.icon-btn-small { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--color-text); margin-left: 6px; }
+.icon-btn-small:hover { background: var(--color-bg); }
+.icon-btn-small:disabled { opacity: 0.6; cursor: not-allowed; }
+.done-mark { color: var(--color-success); margin-left: 6px; display: flex; align-items: center; }
+.chat-status { font-size: 0.75rem; margin-top: 6px; text-align: right; opacity: 0.8; }
+
+.seg { display: flex; background: var(--color-bg); padding: 4px; border-radius: 8px; width: max-content; margin-bottom: 16px; flex-shrink: 0; }
+.seg-btn {
+  background: none; border: none; padding: 6px 16px; border-radius: 6px;
+  font-size: 0.85rem; font-weight: 500; color: var(--color-text-secondary);
+  cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s ease;
+}
+.seg-btn.active { background: var(--color-surface); color: var(--color-text); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
 .drop-zone {
-  border: 2px dashed var(--color-border);
-  border-radius: var(--radius);
-  padding: 36px 20px;
-  text-align: center;
-  transition: all 0.2s;
-  display: flex; flex-direction: column; align-items: center;
+  flex: 1; border: 2px dashed var(--color-border); border-radius: var(--radius-md);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--color-surface); transition: all 0.2s ease; margin-bottom: 16px; min-height: 200px;
 }
-.drop-zone.dragging { border-color: var(--color-primary); background: rgba(79,70,229,0.05); }
-.drop-icon { color: var(--color-text-secondary); margin-bottom: 8px; }
-.hint { font-size: 0.8rem; color: var(--color-text-secondary); }
+.drop-zone.dragging { border-color: var(--color-primary); background: var(--color-bg); transform: scale(1.02); }
+.drop-icon { color: var(--color-text-secondary); margin-bottom: 12px; opacity: 0.5; }
+.drop-zone p { margin: 0; color: var(--color-text-secondary); font-size: 0.95rem; }
+.drop-zone .hint { font-size: 0.8rem; opacity: 0.7; margin-top: 4px; }
+
+.file-list { margin-bottom: 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
+.file-list-header { background: var(--color-bg); padding: 8px 12px; font-size: 0.8rem; color: var(--color-text-secondary); font-weight: 600; border-bottom: 1px solid var(--color-border); }
+.file-list-scroll { max-height: 200px; overflow-y: auto; }
+.file-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--color-border); }
+.file-item:last-child { border-bottom: none; }
+.file-thumb { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+.file-thumb-icon { display: flex; align-items: center; justify-content: center; background: var(--color-bg); color: var(--color-text-secondary); }
+.file-info { flex: 1; min-width: 0; }
+.file-name { font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--color-text); }
+.file-size { font-size: 0.75rem; color: var(--color-text-secondary); margin-top: 2px; }
+.x-btn { background: none; border: none; color: var(--color-text-secondary); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
+.x-btn:hover:not(:disabled) { background: var(--color-danger); color: #fff; }
+.x-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .text-area {
-  width: 100%;
-  min-height: 160px;
-  padding: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: 0.95rem;
-  resize: vertical;
-  font-family: inherit;
+  flex: 1; width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  padding: 12px; font-size: 0.95rem; background: var(--color-surface); color: var(--color-text);
+  resize: none; outline: none; transition: border-color 0.2s ease; margin-bottom: 16px;
+  font-family: inherit; line-height: 1.5; min-height: 200px;
 }
+.text-area:focus { border-color: var(--color-primary); }
+.text-area:disabled { opacity: 0.7; cursor: not-allowed; }
 
-.file-list { margin-top: 16px; }
-.file-list-header { font-size: 0.85rem; color: var(--color-text-secondary); margin-bottom: 8px; }
-.file-list-scroll { max-height: 320px; overflow-y: auto; }
-.file-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px; background: var(--color-surface);
-  border: 1px solid var(--color-border); border-radius: var(--radius-sm); margin-bottom: 6px;
-}
-.file-thumb {
-  width: 44px; height: 44px; border-radius: 8px; flex-shrink: 0;
-  object-fit: cover; background: var(--color-bg);
-}
-.file-thumb-icon {
-  display: flex; align-items: center; justify-content: center; color: var(--color-text-secondary);
-}
-.file-info { flex: 1; min-width: 0; }
-.file-name { font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-size { font-size: 0.75rem; color: var(--color-text-secondary); }
-.x-btn {
-  background: none; border: none; cursor: pointer; color: var(--color-text-secondary);
-  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 50%;
-}
-.x-btn:hover { background: var(--color-danger); color: white; }
+.btn-send-main { width: 100%; padding: 12px; font-size: 1rem; border-radius: var(--radius-md); font-weight: 600; flex-shrink: 0; }
 
-.progress-section { margin-top: 16px; }
-.phase-text { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--color-text-secondary); }
-.progress-meta { display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 6px; color: var(--color-text-secondary); }
-.muted { color: var(--color-text-secondary); }
+.progress-section { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 16px; text-align: center; margin-bottom: 16px; flex-shrink: 0; }
+.phase-text { margin: 0; font-size: 0.9rem; color: var(--color-text-secondary); display: flex; align-items: center; justify-content: center; gap: 8px; }
+.progress-meta { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 8px; color: var(--color-text); font-weight: 500; }
+.progress-meta .muted { color: var(--color-text-secondary); font-weight: normal; }
+.cancel-btn { margin-top: 16px; width: 100%; }
 
-.btn-send-main { width: 100%; margin-top: 16px; padding: 14px; font-size: 1rem; }
-.cancel-btn { width: 100%; margin-top: 12px; }
+.prepare-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.prepare-box { background: var(--color-surface); padding: 24px; border-radius: var(--radius-md); text-align: center; width: 280px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
+.prepare-box p { margin: 12px 0 0 0; font-weight: 600; font-size: 0.95rem; }
+.prepare-hint { font-size: 0.8rem; color: var(--color-text-secondary); margin-top: 8px !important; font-weight: 400 !important; }
 
-.prepare-overlay {
-  position: fixed; inset: 0; z-index: 2200;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex; align-items: center; justify-content: center; padding: 24px;
-}
-.prepare-box {
-  background: var(--color-surface);
-  border-radius: var(--radius);
-  padding: 28px 32px;
-  display: flex; flex-direction: column; align-items: center; gap: 12px;
-  box-shadow: var(--shadow-lg);
-  color: var(--color-text);
-  text-align: center;
-}
-.prepare-box .spin { color: var(--color-primary); }
-.prepare-hint { font-size: 0.8rem; color: var(--color-text-secondary); max-width: 240px; }
 .modal-enter-active, .modal-leave-active { transition: opacity 0.2s ease; }
 .modal-enter-from, .modal-leave-to { opacity: 0; }
 </style>

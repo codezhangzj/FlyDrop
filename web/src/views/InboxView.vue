@@ -6,9 +6,8 @@ import { wsClient } from '../services/ws'
 import { useToast } from '../composables/useToast'
 import { formatSize, formatSpeed, formatEta, formatTime } from '../services/format'
 import { captureVideoThumbnail } from '../services/videoThumb'
-import {
-  isDesktop, desktopDownload, revealFile, onDownloadProgress,
-} from '../services/desktop'
+import { isDesktop } from '../services/desktop'
+import { useDownload } from '../composables/useDownload'
 import {
   Inbox, Download, FolderOpen, FileText, Image as ImageIcon,
   Check, X, Loader, Trash2, Package, Clock, Copy, Type, Play, Film,
@@ -76,56 +75,7 @@ watch(incomingTransfers, (list) => {
   })
 }, { immediate: true, deep: true })
 
-let unsub: (() => void) | null = null
-onMounted(() => {
-  if (desktop) {
-    unsub = onDownloadProgress(({ key, received, total }) => {
-      transfersStore.setDownloadProgress(key, received, total)
-    })
-  }
-})
-onUnmounted(() => unsub?.())
-
-function zipKey(transferId: string) { return `zip:${transferId}` }
-function dl(key: string) { return transfersStore.getDownload(key) }
-
-function buildUrl(transferId: string, fileId?: string) {
-  const base = fileId ? `/api/download/${transferId}/${fileId}` : `/api/download/${transferId}`
-  return `${base}?deviceId=${encodeURIComponent(myDeviceId.value)}`
-}
-
-async function runDownload(key: string, url: string, fileName: string) {
-  if (desktop) {
-    transfersStore.setDownload(key, { status: 'downloading', progress: 0, _lastTs: undefined, _lastBytes: undefined })
-    const res = await desktopDownload({ url, fileName, key })
-    if (res.ok) {
-      transfersStore.setDownload(key, { status: 'done', progress: 1, savePath: res.savePath, speed: 0, etaSec: 0 })
-      toast.success(`已下载：${fileName}`)
-    } else {
-      transfersStore.setDownload(key, { status: 'error', progress: 0, error: res.error })
-      toast.error(`下载失败：${fileName}`)
-    }
-  } else {
-    const a = document.createElement('a')
-    a.href = url; a.download = fileName
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    transfersStore.setDownload(key, { status: 'done', progress: 1 })
-    toast.success('已开始下载')
-  }
-}
-
-function downloadFile(transferId: string, fileId: string, fileName: string) {
-  runDownload(fileId, buildUrl(transferId, fileId), fileName)
-}
-function downloadAll(transferId: string) {
-  runDownload(zipKey(transferId), buildUrl(transferId), 'files.zip')
-}
-async function reveal(savePath?: string) {
-  if (savePath) {
-    const ok = await revealFile(savePath)
-    if (!ok) toast.error('文件不存在或已移动')
-  }
-}
+const { dl, zipKey, downloadFile, downloadAll, reveal } = useDownload()
 
 function acceptTransfer(t: TransferItem) {
   wsClient.send({ type: 'transfer:accept', payload: { transferId: t.transferId } })

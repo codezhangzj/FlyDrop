@@ -29,6 +29,8 @@ export interface TransferItem {
   totalBytes: number
   message?: string
   peerName?: string      // 对端设备名
+  groupId?: string       // 群组 ID
+  groupName?: string     // 群组名
   createdAt: number
   // 运行时速度统计（不持久化也无妨）
   speed?: number         // bytes/s
@@ -129,7 +131,7 @@ export const useTransfersStore = defineStore('transfers', () => {
   }
 
   // ---- 传输 ----
-  function addOutgoing(item: { transferId: string; files: FileMeta[]; totalBytes: number; message?: string; peerName?: string; status?: TransferStatus }) {
+  function addOutgoing(item: { transferId: string; files: FileMeta[]; totalBytes: number; message?: string; peerName?: string; status?: TransferStatus; groupId?: string; groupName?: string }) {
     if (find(item.transferId)) return
     transfers.value.unshift({
       transferId: item.transferId,
@@ -140,21 +142,25 @@ export const useTransfersStore = defineStore('transfers', () => {
       totalBytes: item.totalBytes,
       message: item.message,
       peerName: item.peerName,
+      groupId: item.groupId,
+      groupName: item.groupName,
       createdAt: Date.now(),
     })
   }
 
-  function addIncoming(payload: { transferId: string; files: FileMeta[]; message?: string; fromDeviceName?: string }) {
+  function addIncoming(payload: { transferId: string; files: FileMeta[]; message?: string; fromDeviceName?: string; requiresAccept?: boolean; groupId?: string; groupName?: string }) {
     if (find(payload.transferId)) return
     transfers.value.unshift({
       transferId: payload.transferId,
       direction: 'incoming',
       files: payload.files,
-      status: 'awaiting',
+      status: payload.requiresAccept === false ? 'uploading' : 'awaiting',
       uploadedBytes: 0,
       totalBytes: payload.files.reduce((s, f) => s + f.size, 0),
       message: payload.message,
       peerName: payload.fromDeviceName,
+      groupId: payload.groupId,
+      groupName: payload.groupName,
       createdAt: Date.now(),
     })
   }

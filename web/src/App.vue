@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDevicesStore } from './stores/devices'
 import { useTransfersStore } from './stores/transfers'
 import { useSettingsStore } from './stores/settings'
+import { useGroupsStore } from './stores/groups'
 import { wsClient, connStatus } from './services/ws'
 import { ensureNotifyPermission, systemNotify, playBeep } from './services/notify'
 import { useToast } from './composables/useToast'
@@ -18,6 +19,7 @@ const router = useRouter()
 const devicesStore = useDevicesStore()
 const transfersStore = useTransfersStore()
 const settings = useSettingsStore()
+const groupsStore = useGroupsStore()
 const toast = useToast()
 
 function getDeviceName(): string {
@@ -98,6 +100,7 @@ const connInfo = computed(() => {
 
 onMounted(() => {
   window.addEventListener('resize', onResize)
+  window.addEventListener('drop', forceClearDrag, true)
   ensureNotifyPermission()
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -112,6 +115,12 @@ onMounted(() => {
         break
       case 'device:list':
         devicesStore.setDevices(msg.payload.devices)
+        break
+      case 'group:list':
+        groupsStore.setGroups(msg.payload.groups)
+        break
+      case 'group:created':
+        groupsStore.addGroup(msg.payload.group)
         break
       case 'transfer:offer':
         transfersStore.addIncoming(msg.payload)
@@ -139,8 +148,14 @@ onMounted(() => {
   // 连接状态变化提示
 })
 
+function forceClearDrag() {
+  dragDepth = 0
+  globalDragging.value = false
+}
+
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
+  window.removeEventListener('drop', forceClearDrag, true)
   wsClient.close()
 })
 </script>

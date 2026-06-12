@@ -1,6 +1,6 @@
 {
   "name": "flydrop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "局域网文件传输工具",
   "type": "module",
   "main": "dist/electron/main.cjs",
@@ -101,5 +101,9 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
+  },
+  "optionalDependencies": {
+    "@img/sharp-win32-arm64": "^0.35.1",
+    "@img/sharp-win32-x64": "^0.35.1"
   }
 }

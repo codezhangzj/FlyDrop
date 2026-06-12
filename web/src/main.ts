@@ -9,7 +9,7 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/devices' },
     { path: '/devices', component: () => import('./views/DevicesView.vue') },
-    { path: '/send/:deviceId', component: () => import('./views/SendView.vue'), props: true },
+    { path: '/send/:targetId', component: () => import('./views/SendView.vue'), props: true },
     { path: '/inbox', component: () => import('./views/InboxView.vue') },
     { path: '/settings', component: () => import('./views/SettingsView.vue') },
   ]

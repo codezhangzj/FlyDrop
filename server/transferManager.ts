@@ -44,18 +44,16 @@ export class TransferManager {
     }
 
     const transferId = uuid()
-
-    // 对文件名做安全过滤，防止目录穿越
-    const safeFiles: FileMeta[] = input.files.map(f => ({
-      ...f,
-      name: sanitizeFileName(f.name),
-    }))
+    const safeFiles = this.safeFiles(input.files)
 
     const totalBytes = safeFiles.reduce((s, f) => s + f.size, 0)
+    const fromDevice = this.deviceMgr.get(input.fromDeviceId)
+    const fromDeviceName = fromDevice?.displayName ?? '未知设备'
     const t: TransferEntry = {
       transferId,
       fromDeviceId: input.fromDeviceId,
       toDeviceId: input.toDeviceId,
+      fromDeviceName,
       files: safeFiles,
       status: 'pending',
       createdAt: Date.now(),
@@ -70,10 +68,6 @@ export class TransferManager {
     this.transfers.set(transferId, t)
     this.storage.prepare(transferId)
 
-    // 发送端设备名（供接收端展示）
-    const fromDevice = this.deviceMgr.get(input.fromDeviceId)
-    const fromDeviceName = fromDevice?.displayName ?? '未知设备'
-
     // 通知接收端：有新的传入传输，等待其接受/拒绝
     this.deviceMgr.send(input.toDeviceId, {
       type: 'transfer:offer',
@@ -83,6 +77,7 @@ export class TransferManager {
         files: safeFiles,
         message: input.message,
         fromDeviceName,
+        requiresAccept: true,
       }
     })
 
@@ -97,10 +92,88 @@ export class TransferManager {
   }
 
   /**
+   * 创建群发任务：发送端只上传一次，所有连接到服务的局域网设备都可下载。
+   */
+  createGroupOffer(input: {
+    fromDeviceId: string
+    groupId: string
+    groupName: string
+    files: FileMeta[]
+    message?: string
+  }): Transfer | null {
+    const recipients = this.groupRecipientIds(input.fromDeviceId)
+    if (recipients.length === 0) {
+      this.deviceMgr.send(input.fromDeviceId, {
+        type: 'transfer:error',
+        payload: { transferId: '', error: '暂无在线设备可接收群发' }
+      })
+      return null
+    }
+
+    const transferId = uuid()
+    const safeFiles = this.safeFiles(input.files)
+    const totalBytes = safeFiles.reduce((s, f) => s + f.size, 0)
+    const fromDevice = this.deviceMgr.get(input.fromDeviceId)
+    const fromDeviceName = fromDevice?.displayName ?? '未知设备'
+
+    const t: TransferEntry = {
+      transferId,
+      fromDeviceId: input.fromDeviceId,
+      groupId: input.groupId,
+      groupName: input.groupName,
+      fromDeviceName,
+      files: safeFiles,
+      status: 'pending',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + config.ttlMs,
+      message: input.message,
+      uploadedBytes: 0,
+      totalBytes,
+      receivedChunks: new Map(),
+      assembledFiles: new Set(),
+    }
+
+    this.transfers.set(transferId, t)
+    this.storage.prepare(transferId)
+
+    this.sendToRecipients(t, {
+      type: 'transfer:offer',
+      payload: {
+        transferId,
+        groupId: input.groupId,
+        groupName: input.groupName,
+        files: safeFiles,
+        message: input.message,
+        fromDeviceName,
+        requiresAccept: false,
+      }
+    })
+
+    this.deviceMgr.send(input.fromDeviceId, {
+      type: 'transfer:created',
+      payload: { transferId, groupId: input.groupId }
+    })
+    this.deviceMgr.send(input.fromDeviceId, {
+      type: 'transfer:accept',
+      payload: { transferId }
+    })
+
+    log('info', '创建群发任务', {
+      transferId,
+      from: input.fromDeviceId,
+      groupId: input.groupId,
+      recipients: recipients.length,
+      files: input.files.length,
+    })
+    return t
+  }
+
+  /**
    * 接收端接受传输：通知发送端开始上传。
    */
   acceptTransfer(transferId: string, byDeviceId: string): void {
     const t = this.transfers.get(transferId)
+    if (t?.groupId) return
     if (!t || t.toDeviceId !== byDeviceId) return
     if (t.status !== 'pending') return
     this.deviceMgr.send(t.fromDeviceId, {
@@ -115,6 +188,7 @@ export class TransferManager {
    */
   rejectTransfer(transferId: string, byDeviceId: string): void {
     const t = this.transfers.get(transferId)
+    if (t?.groupId) return
     if (!t || t.toDeviceId !== byDeviceId) return
     t.status = 'failed'
     this.storage.purge(transferId)
@@ -161,7 +235,7 @@ export class TransferManager {
       payload: { transferId: t.transferId, uploadedBytes: t.uploadedBytes, totalBytes: t.totalBytes }
     }
     this.deviceMgr.send(t.fromDeviceId, progressMsg)
-    this.deviceMgr.send(t.toDeviceId, progressMsg)
+    this.sendToRecipients(t, progressMsg)
 
     // 检查文件是否完成
     const fileMeta = t.files.find(f => f.fileId === args.fileId)
@@ -179,7 +253,7 @@ export class TransferManager {
             payload: { transferId: t.transferId, error: `文件大小校验失败（期望 ${fileMeta.size}，实际 ${actualSize}）` }
           }
           this.deviceMgr.send(t.fromDeviceId, errMsg)
-          this.deviceMgr.send(t.toDeviceId, errMsg)
+          this.sendToRecipients(t, errMsg)
           log('warn', '完整性校验失败', { transferId: t.transferId, fileId: args.fileId, expected: fileMeta.size, actual: actualSize })
           return { done: false, uploadedBytes: t.uploadedBytes }
         }
@@ -192,9 +266,9 @@ export class TransferManager {
 
     if (allDone) {
       t.status = 'ready'
-      this.deviceMgr.send(t.toDeviceId, {
+      this.sendToRecipients(t, {
         type: 'transfer:ready',
-        payload: { transferId: t.transferId, files: t.files }
+        payload: { transferId: t.transferId, files: t.files, groupId: t.groupId, groupName: t.groupName }
       })
       log('info', '传输就绪', { transferId: t.transferId })
     }
@@ -210,14 +284,18 @@ export class TransferManager {
   }
 
   /**
-   * 下载授权校验：仅传输的接收方（targetDevice）可下载。
-   * 当且仅当任务存在、状态为 ready/completed、且请求方是 toDeviceId 时返回 true。
+   * 下载授权校验：
+   * - 点对点传输：仅接收方可下载
+   * - 群发传输：所有已连接到服务的非发送方设备可下载
    */
   authorizeDownload(transferId: string, requestingDeviceId: string | undefined): boolean {
     const t = this.transfers.get(transferId)
     if (!t) return false
     if (t.status !== 'ready' && t.status !== 'completed') return false
     if (!requestingDeviceId) return false
+    if (t.groupId) {
+      return requestingDeviceId !== t.fromDeviceId && Boolean(this.deviceMgr.get(requestingDeviceId))
+    }
     return t.toDeviceId === requestingDeviceId
   }
 
@@ -261,7 +339,7 @@ export class TransferManager {
       type: 'transfer:cancel',
       payload: { transferId }
     })
-    this.deviceMgr.send(t.toDeviceId, {
+    this.sendToRecipients(t, {
       type: 'transfer:cancel',
       payload: { transferId }
     })
@@ -285,11 +363,42 @@ export class TransferManager {
   listForDevice(deviceId: string): Transfer[] {
     const result: Transfer[] = []
     for (const t of this.transfers.values()) {
+      if (t.groupId) {
+        if (t.fromDeviceId !== deviceId && t.status !== 'failed' && t.status !== 'expired') {
+          result.push(t)
+        }
+        continue
+      }
       if (t.toDeviceId === deviceId || t.fromDeviceId === deviceId) {
         result.push(t)
       }
     }
     return result
+  }
+
+  private safeFiles(files: FileMeta[]): FileMeta[] {
+    return files.map(f => ({
+      ...f,
+      name: sanitizeFileName(f.name),
+    }))
+  }
+
+  private groupRecipientIds(fromDeviceId: string): string[] {
+    return this.deviceMgr
+      .list()
+      .filter(d => d.deviceId !== fromDeviceId)
+      .map(d => d.deviceId)
+  }
+
+  private recipientIds(t: TransferEntry): string[] {
+    if (t.groupId) return this.groupRecipientIds(t.fromDeviceId)
+    return t.toDeviceId ? [t.toDeviceId] : []
+  }
+
+  private sendToRecipients(t: TransferEntry, msg: WsMessage): void {
+    for (const deviceId of this.recipientIds(t)) {
+      this.deviceMgr.send(deviceId, msg)
+    }
   }
 
   /**

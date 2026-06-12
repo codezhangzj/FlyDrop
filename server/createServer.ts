@@ -9,6 +9,7 @@ import fs from 'fs'
 import { config } from './config.js'
 import { listLanIPv4 } from './network.js'
 import { DeviceManager } from './deviceManager.js'
+import { GroupManager } from './groupManager.js'
 import { StorageManager } from './storage.js'
 import { TransferManager } from './transferManager.js'
 import { registerUploadRoutes } from './routes/upload.js'
@@ -17,7 +18,7 @@ import { registerPreviewRoutes } from './routes/preview.js'
 import { registerStreamRoutes } from './routes/stream.js'
 import { registerMetaRoutes } from './routes/meta.js'
 import { log } from './utils/logger.js'
-import type { WsMessage } from './types.js'
+import type { Transfer, WsMessage } from './types.js'
 
 export interface StartServerOptions {
   /** 前端静态资源目录，不传则自动探测 dist/web 或 web/dist */
@@ -53,8 +54,47 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
   await app.register(fastifyWebsocket)
 
   const deviceMgr = new DeviceManager()
+  const groupMgr = new GroupManager(deviceMgr)
   const storage = new StorageManager()
   const transferMgr = new TransferManager(storage, deviceMgr)
+
+  function sendTransferSnapshot(deviceId: string, transfer: Transfer): void {
+    deviceMgr.send(deviceId, {
+      type: 'transfer:offer',
+      payload: {
+        transferId: transfer.transferId,
+        groupId: transfer.groupId,
+        groupName: transfer.groupName,
+        files: transfer.files,
+        message: transfer.message,
+        fromDeviceName: transfer.fromDeviceName,
+        requiresAccept: false,
+      }
+    })
+
+    if (transfer.status === 'uploading') {
+      deviceMgr.send(deviceId, {
+        type: 'transfer:progress',
+        payload: {
+          transferId: transfer.transferId,
+          uploadedBytes: transfer.uploadedBytes,
+          totalBytes: transfer.totalBytes,
+        }
+      })
+    }
+
+    if (transfer.status === 'ready' || transfer.status === 'completed') {
+      deviceMgr.send(deviceId, {
+        type: 'transfer:ready',
+        payload: {
+          transferId: transfer.transferId,
+          files: transfer.files,
+          groupId: transfer.groupId,
+          groupName: transfer.groupName,
+        }
+      })
+    }
+  }
 
   const heartbeatInterval = setInterval(() => {
     deviceMgr.pruneStale()
@@ -80,6 +120,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
         type: 'device:list',
         payload: { devices: deviceMgr.list() }
       }))
+      groupMgr.sendList(device.deviceId)
+      for (const transfer of transferMgr.listForDevice(device.deviceId).filter(t => t.groupId)) {
+        sendTransferSnapshot(device.deviceId, transfer)
+      }
 
       socket.on('message', (raw: Buffer) => {
         let msg: WsMessage
@@ -101,11 +145,41 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
             }
             break
 
+          case 'group:create':
+            if (msg.payload) {
+              const group = groupMgr.create({
+                ownerDeviceId: device.deviceId,
+                ownerName: device.displayName,
+                name: msg.payload.name,
+              })
+              deviceMgr.send(device.deviceId, {
+                type: 'group:created',
+                payload: { group }
+              })
+            }
+            break
+
           case 'transfer:offer':
-            if (msg.payload && 'toDeviceId' in msg.payload && 'files' in msg.payload) {
+            if (msg.payload && 'files' in msg.payload && msg.payload.toDeviceId) {
               transferMgr.createOffer({
                 fromDeviceId: device.deviceId,
                 toDeviceId: msg.payload.toDeviceId,
+                files: msg.payload.files,
+                message: msg.payload.message,
+              })
+            } else if (msg.payload && 'files' in msg.payload && msg.payload.groupId) {
+              const group = groupMgr.get(msg.payload.groupId)
+              if (!group) {
+                deviceMgr.send(device.deviceId, {
+                  type: 'transfer:error',
+                  payload: { transferId: '', error: '群聊不存在' }
+                })
+                break
+              }
+              transferMgr.createGroupOffer({
+                fromDeviceId: device.deviceId,
+                groupId: group.groupId,
+                groupName: group.name,
                 files: msg.payload.files,
                 message: msg.payload.message,
               })
