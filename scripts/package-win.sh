@@ -87,7 +87,7 @@ for cpu in "${sharp_cpu_targets[@]}"; do
   ok "win32-$cpu sharp 二进制已就位"
 done
 
-npx electron-builder --win nsis "${builder_arch_flags[@]}" -c.electronVersion="$WINDOWS_ELECTRON_VERSION"
+npx electron-builder --win nsis "${builder_arch_flags[@]}" -c.electronVersion="$WINDOWS_ELECTRON_VERSION" --publish never
 
 log "Package output"
 find "$RELEASE_DIR" -maxdepth 2 \( -name '*.exe' -o -name "${APP_NAME}.exe" \) -print

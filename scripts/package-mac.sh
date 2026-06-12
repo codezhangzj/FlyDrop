@@ -52,7 +52,7 @@ find "$RELEASE_DIR" -maxdepth 1 \( -name '*.dmg' -o -name '*.dmg.blockmap' \) -d
 log "Building macOS application"
 npm run build:web
 npm run build:electron
-npx electron-builder --mac
+npx electron-builder --mac --publish never
 
 log "Package output"
 find "$RELEASE_DIR" -maxdepth 2 \( -name '*.dmg' -o -name "${APP_NAME}.app" \) -print

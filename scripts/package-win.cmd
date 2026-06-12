@@ -80,7 +80,7 @@ for %%C in (%SHARP_CPUS%) do (
   echo OK: win32-%%C sharp binary in place
 )
 
-call npx electron-builder --win nsis %ARCH_FLAGS% -c.electronVersion=%WINDOWS_ELECTRON_VERSION% || exit /b 1
+call npx electron-builder --win nsis %ARCH_FLAGS% -c.electronVersion=%WINDOWS_ELECTRON_VERSION% --publish never || exit /b 1
 
 echo ==^> Package output
 dir /b release\*.exe 2>nul

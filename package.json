@@ -1,7 +1,8 @@
 {
   "name": "flydrop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "局域网文件传输工具",
+  "author": "zhangzujun",
   "type": "module",
   "main": "dist/electron/main.cjs",
   "scripts": {
@@ -19,9 +20,9 @@
     "electron:dev": "npm run build:web && npm run build:electron && electron dist/electron/main.cjs",
     "package:mac": "bash scripts/package-mac.sh",
     "package:win": "bash scripts/package-win.sh",
-    "dist": "npm run build:web && npm run build:electron && electron-builder",
-    "dist:mac": "npm run build:web && npm run build:electron && electron-builder --mac",
-    "dist:win": "npm run build:web && npm run build:electron && electron-builder --win"
+    "dist": "npm run build:web && npm run build:electron && electron-builder --publish never",
+    "dist:mac": "npm run build:web && npm run build:electron && electron-builder --mac --publish never",
+    "dist:win": "npm run build:web && npm run build:electron && electron-builder --win --publish never"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

@@ -136,7 +136,7 @@ async function toggleAutoLaunch() {
         <Info :size="16" />
         <div>
           <div class="about-name">FlyDrop</div>
-          <div class="about-ver">版本 0.1.0 · 局域网文件传输</div>
+          <div class="about-ver">版本 0.1.2 · 局域网文件传输</div>
         </div>
       </div>
     </section>
